@@ -1,0 +1,236 @@
+---
+title: "Market Analasis"
+author: "Abraham Girmai Habtai"
+date: "16 november 2018"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Norsk Hydro Analasis
+
+```{r}
+rm(list=ls())
+#preventing startup messages and call pacage, if it daoesnt exsist, then install and call
+suppressPackageStartupMessages(require(xts)) || {install.packages("xts"); require(xts)}
+suppressPackageStartupMessages(require(tidyverse)) || {install.packages("tidyverse"); require(tidyverse)}
+suppressPackageStartupMessages(require(rvest)) || {install.packages("rvest"); require(rvest)}
+suppressPackageStartupMessages(require(anytime)) || {install.packages("anytime"); require(anytime)}
+suppressPackageStartupMessages(require(lubridate)) || {install.packages("lubridate"); require(lubridate)}
+suppressPackageStartupMessages(require(mosaic)) || {install.packages("mosaic"); require(mosaic)}
+suppressPackageStartupMessages(require(stringr)) || {install.packages("stringr"); require(stringr)}
+suppressPackageStartupMessages(require(ggvis)) || {install.packages("ggvis"); require(ggvis)}
+suppressPackageStartupMessages(require(plotly)) || {install.packages("plotly"); require(plotly)}
+suppressPackageStartupMessages(require(dygraphs)) || {install.packages("dygraphs"); require(dygraphs)}
+
+#require(data.table)
+#library(quantmod)
+#Aluminium<-readRDS("Aluminium_data")
+#Copper<-readRDS("copper_data")
+```
+
+# Norsk Hydro
+
+```{r}
+dateformat <- col_date(format = "%Y%m%d")
+Norsk_hydro <- read_csv("https://www.netfonds.no/quotes/paperhistory.php?paper=NHY.OSE&csv_format=csv", col_types = cols(quote_date = dateformat))
+#checking the reason for "Warning: 74 parsing failures"
+summary(Norsk_hydro)
+
+Norsk_hydro <- Norsk_hydro %>% select(c(1,7))
+names(Norsk_hydro) <- c("date", "nhy")
+glimpse(Norsk_hydro)
+# simple ggvis line graph for overview
+
+Norsk_hydro %>%
+  ggvis(~date, ~nhy) %>%
+  layer_lines()
+
+print (Norsk_hydro)
+
+```
+
+#exchange rate USD/NOK, shows the value of a US dollar in norwigian Crowns
+```{r}
+USD<- read_csv("https://www.netfonds.no/quotes/paperhistory.php?paper=USDNOK.FXSX&csv_format=csv ",
+               col_types = cols(quote_date = dateformat))
+#selectingclose values and date
+USD <- USD %>% select(c(1,7)) 
+names(USD) <- c("date","NOK_USD")
+USD %>% 
+    ggvis(~date,~NOK_USD) %>% 
+    layer_lines()
+# the data seems to be lacking from 2006- 2013- but i am keeping it  for later analysis
+#which is somthing you'll notice if you hover your computer mouse of the straight line 
+ggplotly(ggplot(USD, aes(date, NOK_USD)) + geom_line(color = "#E7B800"))
+
+```
+
+# interactive graphs
+
+```{r}
+NHY <- xts(Norsk_hydro$nhy, order.by = Norsk_hydro$date)
+#usd <- xts(USD$NOK_USD, order.by = USD$date, frequency = 365)
+#interactive dygraph over nhy data, value during the 2008 crisis is marked
+dygraph(NHY) %>%
+  dyOptions(labelsUTC = TRUE, fillGraph=TRUE, fillAlpha=0.1, drawGrid = FALSE, colors="#00AFBB") %>%
+  dyRangeSelector(keepMouseZoom = T) %>%
+  dyCrosshair(direction = "vertical") %>%
+  dyHighlight(highlightCircleSize = 5, highlightSeriesBackgroundAlpha = 0.2, hideOnMouseOut = FALSE)  %>%
+  dyRoller(rollPeriod = 1) %>%
+  dyEvent("2008-11-20", "Financial crisis", labelLoc = "top")
+  # removing 
+rm(list = "dateformat")
+```
+
+**Specifying the url for desired website to be scrapped**
+the following are a link to westmetall market data
+```{r}
+# URL to westmetall market data
+url_Al <- "https://www.westmetall.com/en/markdaten.php?action=show_table&field=LME_Al_cash"
+url_copper <- "https://www.westmetall.com/en/markdaten.php?action=show_table&field=LME_Cu_stock"
+# Reading & checking the HTML code from the website
+webpage_A <- read_html(url_Al)
+webpage_C <- read_html(url_copper)
+
+```
+
+## Aluminium (in US Dollar per ton)
+CSS selectors to scrap desired sections, and creating a tibble
+```{r}
+Aluminium<- tibble(date = webpage_A %>%  html_nodes("td:nth-child(1)") %>% html_text %>% 
+                    str_replace_all("Febuary","February") %>% anydate,
+              Cash_Settlement= webpage_A %>% html_nodes("td:nth-child(2)") %>% html_text %>%
+                     str_replace_all("\\.",""),
+              LME_3_month = webpage_A %>% html_nodes("td:nth-child(3)") %>% html_text %>%
+                     str_replace_all("\\.",""),
+              Stock = webpage_A %>% html_nodes("td:nth-child(4)") %>% html_text %>%
+                     str_replace_all("\\.", "") %>% as.numeric())
+
+Aluminium$Cash_Settlement<- as.numeric(str_replace_all(Aluminium$Cash_Settlement,",","."))
+Aluminium$LME_3_month <-as.numeric(str_replace_all(Aluminium$LME_3_month,",","."))
+glimpse(Aluminium)
+#saving the commodidity data
+saveRDS(Aluminium, file = "Aluminium_data")
+
+```
+
+## Copper
+
+```{r}
+Copper <- tibble( date = webpage_C %>% html_nodes("td:nth-child(1)") %>% html_text %>%  
+                    str_replace_all("Febuary","February") %>% anydate,
+          Cash_settlment=webpage_C %>% html_nodes("td:nth-child(2)") %>% html_text %>%
+                str_replace_all("\\.",""),
+          LME_3_month = webpage_C %>% html_nodes ("td:nth-child(3)") %>% html_text %>%
+                str_replace_all("\\.",""),
+          Stock = webpage_C %>% html_nodes("td:nth-child(4)") %>% html_text %>%
+                str_replace_all("\\.","") %>% as.numeric())
+Copper$Cash_settlment <- as.numeric(str_replace_all(Copper$Cash_settlment,",","."))
+Copper$LME_3_month <- as.numeric(str_replace_all(Copper$LME_3_month,",","."))
+summary(Copper)
+print(Copper)
+saveRDS(Copper, file = "copper_data")
+rm(list = c("webpage_A","webpage_C", "url_Al","url_copper"))
+
+```
+#creating interactive graph of the substitutes  metals
+```{r}
+Almun <- xts(Aluminium$Cash_Settlement, order.by = Aluminium$date, frequency = 365)
+Copp <- xts(Copper$Cash_settlment, order.by = Copper$date, frequency =  365)
+
+risk_factors <- cbind(Almun,Copp)
+
+dygraph(risk_factors,ylab="Cash_Settlement", 
+        main="Copper and Aluminium Cash_Settlements") %>%
+  dySeries("..1",label="Copper") %>%
+  dySeries("..2",label="Aluminium") %>% 
+  dyOptions(colors = c("blue","brown")) %>%
+  dyRangeSelector(dateWindow = c("2002-02-01", "2018-12-01"))
+
+# selecting data for further manipulation
+Aluminium <- Aluminium %>% select(c(1:2))
+Copper<-Copper %>% select(c(1:2))
+names(Aluminium) <- c("date", "Aluminium")
+names(Copper) <- c("date", "Copper")
+rm(list=c("Almun","Copp", "risk_factors", "NHY"))
+
+```
+
+```{r}
+#joning the data and commodities  
+nhy_sector<-left_join(Norsk_hydro, Aluminium, by = c("date")) %>%
+      left_join(.,Copper,by = c("date"))
+# some missing data due to lack registrations on this dates 
+#and becouse the NHY dat streches further back (several years)
+summary(nhy_sector)
+nhy_sector <- nhy_sector[complete.cases(nhy_sector), ]
+# switiching from wide to long
+nhy_long <- nhy_sector %>% gather(key = "stock", value = "value", -date)
+nhy_long
+#na here accurs becouse of the close data for NHY streches back to 1997
+# and ome few missing value, du to lack of registration
+summary(nhy_long)
+#arrange in ascending order
+nhy_long <- nhy_long %>% arrange(date)
+# calculate the returns of each year
+names(nhy_sector)
+nhy_return <- nhy_sector %>% mutate(., nhy_returns=c(NA, diff(log(nhy))),
+                              Aluminium_returns=c(NA, diff(log(Aluminium))),
+                              Copper_returns=c(NA, diff(log(Copper))))
+# remove the nas
+nhy_return <- nhy_return[complete.cases(nhy_return), ]
+
+#
+nhy_return <- nhy_return %>% mutate(nhy_cumulative=cumsum(nhy_returns),
+                              Aluminium_cumlative=cumsum(Aluminium_returns),
+                              Copper_cumulative=cumsum(Copper_returns))
+#selecting and adding the returns over time
+nhy_long <- nhy_return %>% 
+            select(date,nhy_cumulative,Aluminium_cumlative,Copper_cumulative) %>%
+            gather(key = "stock",value = "value", -date)
+
+# graph the long dataframe
+ggplot(nhy_long, aes(date, value))+ 
+  geom_line(aes(color = stock)) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800","#CC0000"))
+
+#changing to xts format
+nhy_cumulative <- xts(nhy_return$nhy_cumulative, order.by = nhy_return$date)
+Aluminium_cumulative <- xts(nhy_return$Aluminium_cumlative, order.by = nhy_return$date)
+Copper_cumulative <- xts(nhy_return$Copper_cumulative, order.by = nhy_return$date)
+#combining columns
+cumulative_stocks <- cbind(nhy_cumulative,Aluminium_cumulative,Copper_cumulative)
+#creating interactive graph
+cum_dygraph <-dygraph(cumulative_stocks, ylab="cumulative", 
+        main="Cumulative data") %>%
+  dySeries("..1",label="NHY") %>%
+  dySeries("..2",label="Aluminium") %>% 
+  dySeries("..3",label ="Copper") %>%
+  dyOptions(colors = c("lightblue","brown", "orange")) %>%
+  dyEvent("2008-11-20", "Financial crisis", labelLoc = "bottom") %>%
+  dyShading( "2008-1-1", "2009-6-1","#FFE6E6") %>%
+  dyShading("2018-1-1", "2018-11-1") %>%
+  dyRangeSelector(dateWindow = c("2006-02-01", "2018-12-01"))
+cum_dygraph
+#removing dataframes, since the information is saved within the return dataframe
+rm(list=c("cumlative_stocks","nhy_cumulative","Aluminium_cumulative","Copper_cumulative",
+            "Aluminium","Copper","nhy_sector","Norsk_hydro"))
+
+```
+
+```{r}
+# confirming what the obvious , through linaer regression
+nhy_return %>% 
+  ggvis(~nhy, ~Aluminium) %>%
+  layer_points() %>%
+  layer_model_predictions(model = "lm", se = TRUE)
+
+ 
+```
+
+  
