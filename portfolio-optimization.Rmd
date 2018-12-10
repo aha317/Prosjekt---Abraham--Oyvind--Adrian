@@ -1,0 +1,263 @@
+---
+title: "Optimizing a Portfolio"
+author: "Abraham, Adrian, Oyvind"
+date: "10 desember 2018"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, comment = NA)
+```
+
+
+
+```{r Clearing current environment and loading packages, message=FALSE,}
+rm(list=ls())
+#preventing startup messages and call package, if it daoesnt exsist, then install and call
+suppressPackageStartupMessages(require(pacman))
+p_load(tidyverse,rvest,xts,anytime,lubridate,mosaic,stringr,ggvis,plotly,dygraphs,ggplot2,quantmod,
+       readr,knitr,tidyquant,lubridate,tidyr,dplyr,PxWebApiData,tibbletime,zoo,data.table,tsibble,
+       stargazer, timeSeries, fPortfolio, caTools, PerformanceAnalytics)
+```
+
+
+#### **_Iintro_**
+
+When investing the rational choice is the one where one maximizes return and minimizes risk. The term "fortune favors the bold "isn't a good one in finance, since theoretically one can never ssurpass marked return in the long run. So how does one optimize their portfolio?, and are there rsik factors that determin the optimal portfolio weight?
+
+### *Importing salmon prices*
+
+```{r Loading in "fisk" data, change the date format from weekly to daily}
+fisk <- ApiData("http://data.ssb.no/api/v0/dataset/1122.json?lang=no", 
+                getDataByGET = TRUE, col_types = cols(month = col_date(format = "%Y%m")))
+fisk<-fisk[[1]]
+fisk<-spread(fisk, statistikkvariabel, value)
+names(fisk)<-c("commodity.group","date","price","weight")
+currentdate <- Sys.Date()
+systemdate <- as.Date("2008-01-02")
+new <- seq(as.Date("2000-01-05"), as.Date(currentdate), by = "weeks")
+new <- head(new, -1)
+fisk$date <- new
+fisk <- dplyr::filter(fisk, date > "2008-01-08")
+fisk1 <- fisk %>% 
+  dplyr::filter(commodity.group == "Fersk oppalen laks")
+fisk2 <- fisk %>% 
+  dplyr::filter(commodity.group == "Frosen oppalen laks")
+rm(fisk)
+fisk<- left_join(fisk1, fisk2, by=c("date"))
+fisk<-fisk[,c(2,1,3,4,5,6,7)]
+names(fisk)<-c("date", "Fresh", "PriceFresh", "WeightFresh", "Frozen", "PriceFrozen", "WeightFrozen")
+rm(fisk1, fisk2)
+# Create daily and monthly data frame
+daily.df   = data.frame(date = seq(systemdate, currentdate, "days"))
+# Add some variable to the monthly data frame
+daily.df$v = rnorm(nrow(daily.df))
+# Merge
+fisk = merge(daily.df, fisk, by = "date", all = TRUE)
+# Fill up NA's
+fisk = transform(fisk, v = na.locf(v))
+fisk <- fisk[-c(1, 2, 3, 4, 5, 6, 7 ), ]
+#filling the NAs with same weekly data. 
+fisk <- transform(fisk, Fresh = na.locf(Fresh))
+fisk <- transform(fisk, PriceFresh = na.locf(PriceFresh))
+fisk <- transform(fisk, WeightFresh = na.locf(WeightFresh))
+fisk <- transform(fisk, Frozen = na.locf(Frozen))
+fisk <- transform(fisk, PriceFrozen = na.locf(PriceFrozen))
+fisk <- transform(fisk, WeightFrozen = na.locf(WeightFrozen))
+fisk$v <- NULL
+
+names(fisk)<-c("date", "Fresh", "PriceFresh", "WeightFresh", "Frozen", "PriceFrozen", "WeightFrozen")
+
+rm(daily.df)
+
+fisk<-subset(fisk, select = -c( Fresh, WeightFresh, Frozen, WeightFrozen))
+```
+
+#### ** Importing the rest**
+
+
+```{r Loading the rest of the data}
+date.format <- (format ="%Y%m%d")
+EQNR <- read_csv("https://www.netfonds.no/quotes/paperhistory.php?paper=EQNR.OSE&csv_format=csv",
+                 col_types = cols(quote_date = col_date(date.format))) %>% select(quote_date, close)
+names(EQNR) <- c("date", "Equinor")
+#loading Marine harvest stocks. 
+Marine <- read_csv("https://www.netfonds.no/quotes/paperhistory.php?paper=MHG.OSE&csv_format=csv",
+                   col_types = cols(quote_date = col_date(date.format))) %>% select(quote_date, close)
+names(Marine) <- c("date", "MHG")
+#Loading SalMar data
+Sal<- read_csv("https://www.netfonds.no/quotes/paperhistory.php?paper=SALM.OSE&csv_format=csv",
+               col_types = cols(quote_date = col_date(date.format))) %>% select(quote_date, close)
+names(Sal) <- c("date", "SALM")
+#Loading EQNR
+EQNR <- read_csv("https://www.netfonds.no/quotes/paperhistory.php?paper=EQNR.OSE&csv_format=csv",
+                 col_types = cols(quote_date = col_date(date.format))) %>% select(quote_date, close)
+names(EQNR) <- c("date", "Equinor")
+#Loading OSEBX
+OSEBX <- read_csv("https://www.netfonds.no/quotes/paperhistory.php?paper=OSEBX.OSE&csv_format=csv",
+                  col_types = cols(quote_date = col_date(date.format))) %>% select(quote_date, close)
+names(OSEBX) <- c("date", "OSEBX")
+#Loading Crude Oil
+Crude_oil <- read_csv("https://www.netfonds.no/quotes/paperhistory.php?paper=C-EBROUSDBR-SP.GTIS&csv_format=csv",
+                      col_types = cols(quote_date = col_date(date.format))) %>% select(quote_date, close)
+names(Crude_oil) <- c("date", "Crude_oil")
+#Loading Crude WTI
+Crude_WTI <- read_csv("https://www.netfonds.no/quotes/paperhistory.php?paper=C-EWTIUSDBR-SP.GTIS&csv_format=csv",
+                      col_types = cols(quote_date = col_date(date.format))) %>% select(quote_date, close) 
+names(Crude_WTI) <- c("date", "Crude_WTI")
+#Loading NHY
+NHY <- suppressWarnings(read_csv("https://www.netfonds.no/quotes/paperhistory.php?paper=NHY.OSE&csv_format=csv",
+                col_types = cols(quote_date = col_date(date.format))) %>% select(quote_date, close))
+names(NHY) <- c("date", "NHY")
+# URL to westmetall market data and reading it into html
+#CSS selectors to scrap desired sections, and creating a tibble
+ALM<- "https://www.westmetall.com/en/markdaten.php?action=show_table&field=LME_Al_cash" %>%
+  read_html
+Aluminium<- tibble(date = ALM %>%  html_nodes("td:nth-child(1)") %>% html_text %>% 
+                     str_replace_all("Febuary","February") %>% anydate,
+                   ALMN= ALM %>% html_nodes("td:nth-child(2)") %>% html_text %>%
+                     str_replace_all("\\.",""))
+Aluminium$ALMN<- as.numeric(str_replace_all(Aluminium$ALMN,",","."))
+
+```
+
+
+#### ** Merging intoa a database** 
+
+```{r Merging all the data to a huge dataframe}
+#Joining the data
+#Database consist of all stock prices,and commodities
+#Legg til andre variabler fra de andre datasettene
+
+database <- left_join(EQNR, Crude_oil, by=c("date")) %>% left_join(., Crude_WTI, by=c("date")) %>% 
+  left_join(., OSEBX, by=c("date")) %>% left_join(., Sal, by=c("date")) %>% left_join(., Marine, by=c("date")) %>%  left_join(., fisk, by=c("date")) %>% left_join(., NHY, by=c("date")) %>% left_join(., Aluminium, by=c("date"))              
+
+#removing earlier data, since all our data is within the database
+rm(list = c("ALM","Aluminium", "Crude_oil","Crude_WTI","new","format","systemdate",
+"EQNR", "fisk", "Marine", "NHY", "OSEBX", "Sal","currentdate" ))
+```
+
+#### **_preformance analasys_**
+```{r Calculating return for the data}
+#creating an xts object
+#Calculating returns of all the variables, and removing NA values
+returns <- xts(database[,-1], order.by = database$date) %>% Return.calculate %>% na.omit
+
+#comperasion of stock and market
+#the folllowing are column numbers of the stocks chosen for our portfolio
+returns.col <- c(1, 5:6, 9) 
+#market index OSBEX
+indexes.cols <- c(4) 
+#Comparing stock preformance
+
+charts.PerformanceSummary(returns[,c(returns.col,indexes.cols)], colorset=rich6equal,
+                          main = "Performance") 
+
+
+```
+
+
+This is a performance analysis  of Equinox compared to the market and the other stocks within our portfolio
+The first graph shows the monthly cumulative return of the stocks. The two stock companies that stands out here are, Salma and marine Harvest. They seem to have had an upgoing trend. While Equinox and Norse Hydro seems to be well correlated with the index market.
+
+The second graph are the daily returns of equinor
+The third chart is called a drawdown, which shows the level of losses from the last value of peak equity. A drawdown is whenever the cumulative returns dips below the maximum cumulative returns. This graph illustrates the comparative severity of loss. As you can observe here the lower the cumulative return, the higher the drawdown. Whenever there is a sizeable drawdown in the equinox and NHY cumulative returns, so follows OSEBX with a less drawdown
+
+### **computing the effeicient frontier**
+
+```{r}
+#Calculating monthly returns to use in efficient frontier calculation
+mReturns <- apply.monthly(returns, Return.cumulative) #Monthlyreturns
+mReturns <- mReturns[, -c(2:4, 7:8, 10:11)] #Removing index and commodities
+mReturns <- as.timeSeries(mReturns)         #xts as timeseries
+```
+
+ next up is calculating efficient frontier. For this we will be using the function portfolio frontier. This function computes the whole efficient portfolio frontier. The range here is given by the the combination all assets returns and standarddevation that is possible within the portfolio. The blue arrowhead is the optimal portfolio
+
+```{r}
+# calculate the efficient frontier
+#spec (see https://www.rdocumentation.org/packages/fPortfolio/versions/251.70/topics/PortfolioSpec)
+effFrontier <- portfolioFrontier(mReturns, spec = portfolioSpec(), constraints = "LongOnly") 
+plot(effFrontier,c(1,2,3)) #Plot Efficient Frontier
+# get allocations for each portfoiliot for each point on the efficient frontier
+frontierWeights <- getWeights(effFrontier) 
+# naming the frontier wieghts variables
+colnames(frontierWeights) <- c("Equinor", "Salmar", "MHG", "NHY")
+# computing the tangency ( the maximmum possible return of a portfolio combo)
+tangencyPort <- tangencyPortfolio(mReturns, spec=portfolioSpec(), constraints="LongOnly")
+tangencyweights <- getWeights(tangencyPort)
+# stock weight combonation at the tangency point
+TGW <- data.frame(tangencyweights)
+stocks <- colnames(frontierWeights)
+```
+
+### **tangency weights**
+```{r Plot }
+ggplot(TGW, aes(x=stocks, y=tangencyweights, fill=stocks)) +
+  geom_bar(stat="identity", position=position_dodge(),colour="black") +
+  geom_text(aes(label=sprintf("%.02f %%",tangencyweights*100)),
+            position=position_dodge(width=0.9), vjust=-0.25, check_overlap = TRUE) +
+  ggtitle("Tangency Portfolio Weights")+ theme(plot.title = element_text(hjust = 0.5)) +
+  labs(x= "Portfolio Stocks", y = "Portfolio Weight distribution (%)")
+```
+  
+  The function fronteriweights  gives all posssbele allocation given the portfolio combinations. 
+The tangencyportfoloi function 	derives the porfoloio with the highest risk to return ratio on the efficient frontier. This also known as capital market line. The optimal portfolio is whether portfolio front is tangent with this line(blue arrow head)
+We use the getwights function to get the optimal weight of our portfoloio. 
+Tangency portfoloio weights. The ggplot here illustrates a histogram of our portfoloio weight of the different stocks. To our surprise Norsk hydro isn't wighted very well, while marine harvest eight almost half of the optimized portfolio
+
+#### commodities
+  
+```{r}
+#riskfactors
+commodity<- xts(database[,-c(1,2,5:7)], order.by = database$date)
+
+#dygraph with commodity prices
+
+commodity<- xts(database[,-c(1,2,5:7)], order.by = database$date)
+dygraph(commodity) %>%
+  dyOptions(labelsUTC = TRUE, fillGraph=TRUE, fillAlpha=0.1, drawGrid = FALSE, colors= c("brown", "blue", "black", "yellow")) %>%
+  dyRangeSelector(dateWindow = c("2012-01-01", "2018-12-08")) %>%
+  dyCrosshair(direction = "vertical") %>%
+  dyHighlight(highlightCircleSize = 5, hideOnMouseOut = FALSE)  %>%
+ dyRoller(rollPeriod = 1)
+```
+
+###  ** commodity volatilities and maked correlation**
+```{r}
+#Annualized volatility
+chart.RollingPerformance(returns[, c(2:3,7:8,10)],
+                         FUN = 'StdDev.annualized', width = 252, colorset = rich8equal,
+                         lwd = 2, legend.loc = "topleft",
+                         main = "Annualized volatility, 100 day rolling")
+
+#Rolling correlation 100 days with commodities | With OSEBX
+
+chart.RollingCorrelation(returns[,c(2:3,7:8,10), drop=FALSE], returns[,4, drop=FALSE],
+                         colorset=rich12equal, legend.loc="bottomright", width = 100,
+                         main = "Rolling correlation 100 days")
+```
+
+
+this is a simple correlation winwo over hundered days , the graph is intuitiv. the higer the line ther higher the correlation
+
+the first graph show the volatilities over our products. this are risk factors identified by the companies themselvs
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
